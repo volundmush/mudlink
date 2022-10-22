@@ -44,7 +44,7 @@ file(GLOB MUDLINK_INCLUDE include/mudlink/*.h)
 file(GLOB MUDLINK_SRC src/*.cpp)
 
 add_library(mudlink ${MUDLINK_INCLUDE} ${MUDLINK_SRC})
-link_libraries(mudlink pthread ${Boost_LIBRARIES})
+link_libraries(mudlink pthread ${Boost_LIBRARIES} mudtelnet)
 
 include_directories(PUBLIC include
         ${BOOST_LIBRARY_INCLUDES}
@@ -54,5 +54,5 @@ include_directories(PUBLIC include
         )
 
 if(${MAIN_PROJECT})
-    #add_executable(mudlink_test apps/mudlink_test.cpp)
+    add_executable(mudlink_test apps/mudlink_test.cpp)
 endif()

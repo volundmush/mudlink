@@ -1,8 +1,11 @@
 #include <iostream>
 #include <memory>
-#include "mudlink/net.h"
+#include <random>
+#include <boost/asio/experimental/awaitable_operators.hpp>
+#include "mudlink/mudlink.h"
+using namespace boost::asio::experimental::awaitable_operators;
 
-namespace mudlink::net {
+namespace mudlink {
 
     boost::asio::io_context executor;
     entt::registry registry;
@@ -155,11 +158,12 @@ namespace mudlink::net {
         if(clientType == TcpTelnet || clientType == TlsTelnet) {
             auto &buf = registry.get_or_emplace<ByteBuffers>(entity);
             auto &tel = registry.get<mudtelnet::MudTelnet>(entity);
-            std::size_t bytesRead = 0;
+
 
             auto dbuf = boost::asio::dynamic_buffer(buf.inBuffer);
 
             while(this->running) {
+                std::size_t bytesRead = 0;
                 if(clientType == TcpTelnet) {
                     auto &tcp = registry.get<TcpConnection>(entity);
                     bytesRead = co_await tcp.socket->async_read_some(dbuf.prepare(1024), boost::asio::use_awaitable);
@@ -204,9 +208,17 @@ namespace mudlink::net {
         if(clientType == TcpTelnet || clientType == TlsTelnet) {
             auto &buf = registry.get_or_emplace<ByteBuffers>(entity);
             auto &tel = registry.get<mudtelnet::MudTelnet>(entity);
-            std::size_t bytesWritten = 0;
+            auto dbuf = boost::asio::dynamic_buffer(buf.outBuffer);
+            boost::asio::deadline_timer timer(executor);
+
             while(this->running) {
-                auto dbuf = boost::asio::dynamic_buffer(buf.outBuffer);
+                if(buf.outBuffer.empty()) {
+                    timer.expires_from_now(boost::posix_time::milliseconds(50));
+                    co_await timer.async_wait(boost::asio::use_awaitable);
+                    continue;
+                }
+                std::size_t bytesWritten = 0;
+
                 if(clientType == TcpTelnet) {
                     auto &tcp = registry.get<TcpConnection>(entity);
                     bytesWritten = co_await tcp.socket->async_write_some(dbuf.data(), boost::asio::use_awaitable);
@@ -233,15 +245,28 @@ namespace mudlink::net {
         } else if(clientType == WebSocket) {
 
         }
+        this->running = true;
+
+    }
+
+    boost::asio::awaitable<void> ClientConnection::getReady() {
+        if(clientType == TcpTelnet || clientType == TlsTelnet) {
+            boost::asio::deadline_timer timer(executor);
+            timer.expires_from_now(boost::posix_time::milliseconds(200));
+            co_await timer.async_wait(boost::asio::use_awaitable);
+        } else if(clientType == WebSocket) {
+
+        }
+        onReady();
     }
 
     boost::asio::awaitable<void> ClientConnection::run() {
         start();
-        return {};
+        co_await (getReady() && (runReader() || runWriter()));
     }
 
     TcpListener::TcpListener(entt::entity ent, const boost::asio::ip::tcp::endpoint& endp, const std::string &name,
-                             mudlink::net::ClientType prot) {
+                             mudlink::ClientType prot) {
         entity = ent;
         protocol = prot;
         this->name = name;
@@ -317,6 +342,33 @@ namespace mudlink::net {
         }
         threads.clear();
 
+    }
+
+    std::string random_string(std::size_t length)
+    {
+        const std::string characters = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+        std::random_device random_device;
+        std::mt19937 generator(random_device());
+        std::uniform_int_distribution<> distribution(0, characters.size() - 1);
+
+        std::string random_string;
+
+        for (std::size_t i = 0; i < length; ++i)
+        {
+            random_string += characters[distribution(generator)];
+        }
+
+        return random_string;
+    }
+
+    std::string generate_id(const std::string &prf, std::size_t length, std::set<std::string> &existing) {
+        auto generated = prf + "_" + random_string(length);
+        while(existing.count(generated)) {
+            generated = prf + "_" + random_string(length);
+        }
+        existing.insert(generated);
+        return generated;
     }
 
 }
