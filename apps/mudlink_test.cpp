@@ -6,6 +6,10 @@
 
 
 int main(int argc, char **argv) {
-    mudlink::createListener("0.0.0.0", 2008, mudlink::ClientType::TcpTelnet);
-    mudlink::run(1);
+
+    auto exEp = mudlink::createEndpoint("0.0.0.0", 2008);
+    auto inEp = mudlink::createEndpoint("127.0.0.1", 2009);
+
+    mudlink::MudLink link(exEp, inEp);
+    link.start(1);
 }

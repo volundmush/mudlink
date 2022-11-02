@@ -33,6 +33,7 @@ CPMAddPackage(
 )
 
 find_package(Boost REQUIRED COMPONENTS program_options regex)
+find_package(OpenSSL REQUIRED)
 
 set(MAIN_PROJECT OFF)
 if (CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
@@ -44,7 +45,7 @@ file(GLOB MUDLINK_INCLUDE include/mudlink/*.h)
 file(GLOB MUDLINK_SRC src/*.cpp)
 
 add_library(mudlink ${MUDLINK_INCLUDE} ${MUDLINK_SRC})
-link_libraries(mudlink pthread ${Boost_LIBRARIES} mudtelnet)
+link_libraries(mudlink pthread ${Boost_LIBRARIES} mudtelnet OpenSSL::SSL OpenSSL::Crypto)
 
 include_directories(PUBLIC include
         ${BOOST_LIBRARY_INCLUDES}
