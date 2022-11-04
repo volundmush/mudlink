@@ -9,10 +9,9 @@
 #include <unordered_set>
 #include <vector>
 #include <mudtelnet/mudtelnet.h>
+#include <iostream>
 #include "mudlink/base.h"
 #include "mudlink/connection.h"
-
-
 
 namespace mudlink {
 
@@ -42,6 +41,8 @@ namespace mudlink {
         awaitable<void> sendHello();
         awaitable<void> handleConnection(TcpSocket sock);
         awaitable<void> registerConnection(const std::string& prf, connection::ClientConnection *cc);
+        awaitable<bool> detectSSL(TcpSocket &sock, boost::beast::flat_buffer &buf);
+        awaitable<void> detectSSLCheck(TcpSocket &sock, boost::beast::flat_buffer &buf, bool &result);
     };
 
     boost::asio::ip::address parseAddress(const std::string& ip);
@@ -50,5 +51,28 @@ namespace mudlink {
     std::string random_string(std::size_t length);
 
     std::string generate_id(const std::string &prf, std::size_t length, std::set<std::string> &existing);
+
+    awaitable<void> detectTimeout(bool &result, uint32_t milliseconds);
+
+    template<class T>
+    awaitable<void> detectWebSocketCheck(T &sock, boost::beast::flat_buffer &buf, bool &result) {
+        auto [ec, bytesRead] = co_await asio::async_read_until(sock, buf, '\n', use_nothrow_awaitable);
+        if(ec) {
+            std::cout << "error detecting websocket" << std::endl;
+            co_return;
+        }
+        std::cout << "detecting ws, read " << bytesRead << " bytes!" << std::endl;
+        //buf.commit(bytesRead);
+        auto data = beast::buffers_to_string(buf.cdata());
+        std::cout << "DATA IS: " << data << std::endl;
+        result = data.starts_with("GET /") || data.starts_with("POST /") || data.starts_with("HEAD /");
+    }
+
+    template<class T>
+    awaitable<bool> detectWebSocket(T &sock, boost::beast::flat_buffer &buf) {
+        bool result = false;
+        co_await (detectWebSocketCheck(sock, buf, result) || detectTimeout(result, 100));
+        co_return result;
+    }
 
 }

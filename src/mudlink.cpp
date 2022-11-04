@@ -34,7 +34,7 @@ namespace mudlink {
     awaitable<void> MudLink::registerConnection(const std::string& prf, connection::ClientConnection *cc) {
         // Register the connection to the global map.
         connMutex.lock();
-        cc->conn_id = generate_id("telnet", 20, connIDs);
+        cc->conn_id = generate_id(prf, 20, connIDs);
         auto &up = connections[cc->conn_id];
         up.reset(cc);
         connMutex.unlock();
@@ -52,6 +52,30 @@ namespace mudlink {
         connMutex.unlock();
     }
 
+    awaitable<void> detectTimeout(bool &result, uint32_t milliseconds) {
+        asio::deadline_timer timer(executor);
+        timer.expires_from_now(boost::posix_time::milliseconds(milliseconds));
+        co_await timer.async_wait(use_nothrow_awaitable);
+        result = false;
+        co_return;
+    }
+
+    awaitable<void> MudLink::detectSSLCheck(TcpSocket &sock, boost::beast::flat_buffer &buf, bool &result) {
+        auto [ec, tlsResult] = co_await boost::beast::async_detect_ssl(sock, buf, use_nothrow_awaitable);
+        if(ec) {
+            std::cout << "got a detect_ssl error!" << std::endl;
+            result = false;
+        }
+        else result = tlsResult;
+        co_return;
+    }
+
+    awaitable<bool> MudLink::detectSSL(TcpSocket &sock, boost::beast::flat_buffer &buf) {
+        bool result = false;
+        co_await (detectSSLCheck(sock, buf, result) || detectTimeout(result, 100));
+        co_return result;
+    }
+
     awaitable<void> MudLink::handleConnection(TcpSocket sock) {
         auto exec = sock.get_executor();
 
@@ -64,9 +88,8 @@ namespace mudlink {
         boost::asio::ip::tcp::resolver resolver(executor);
         std::vector<std::string> hostnames;
         boost::asio::ip::tcp::resolver::iterator end;
+
         auto [resolveError, it] = co_await resolver.async_resolve(remote_endpoint, use_nothrow_awaitable);
-
-
 
         if(resolveError) {
             std::cout << "Got a resolve error!" << std::endl;
@@ -79,12 +102,9 @@ namespace mudlink {
             for(;it != end; it++)
                 hostnames.push_back(it->host_name());
 
-        auto [ec, tlsResult] = co_await boost::beast::async_detect_ssl(sock, readBuf, use_nothrow_awaitable);
-
-        if(ec) {
-            std::cout << "got a detect_ssl error!" << std::endl;
-            // TODO: something with the error!
-        }
+        bool tlsResult = tlsEnabled && co_await detectSSL(sock, readBuf);
+        auto bufData = beast::buffers_to_string(readBuf.cdata());
+        std::cout << "BUFFER CONTAINS: " << bufData << std::endl;
 
         bool ws = false;
 
@@ -94,12 +114,12 @@ namespace mudlink {
             // If we don't support TLS, just return to kill the incoming connection.
             if(!tlsEnabled) co_return;
             TlsSocket tlsSock(std::move(sock), sslContext);
-            auto [hsEC] = co_await tlsSock.async_handshake(boost::asio::ssl::stream_base::server, use_nothrow_awaitable);
+            auto [hsEC, tlsOK] = co_await tlsSock.async_handshake(boost::asio::ssl::stream_base::server, readBuf.data(), use_nothrow_awaitable);
             if(hsEC) {
                 // TODO: something with the error!
             }
 
-            // HERE: put the ws/telnet check
+            ws = co_await detectWebSocket(tlsSock, readBuf);
             if(ws) {
                 std::cout << "creating TLS WebSocket" << std::endl;
             } else {
@@ -111,7 +131,7 @@ namespace mudlink {
             }
 
         } else {
-            // HERE: put the ws/telnet check
+            ws = co_await detectWebSocket(sock, readBuf);
             if(ws) {
                 std::cout << "creating TCP WebSocket" << std::endl;
             } else {
@@ -128,8 +148,12 @@ namespace mudlink {
     awaitable<void> MudLink::runListener() {
         while(true) {
             auto [ec, socket] = co_await listener.async_accept(use_nothrow_awaitable);
-            if(ec) continue;
+            if(ec) {
+                std::cout << "Error listening!" << std::endl;
+                continue;
+            };
             auto exec = socket.get_executor();
+            std::cout << "got a connection!" << std::endl;
             boost::asio::co_spawn(boost::asio::make_strand(exec), handleConnection(std::move(socket)), boost::asio::detached);
         }
     }
