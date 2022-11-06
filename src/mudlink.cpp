@@ -52,34 +52,33 @@ namespace mudlink {
         connMutex.unlock();
     }
 
-    awaitable<void> detectTimeout(bool &result, uint32_t milliseconds) {
+    awaitable<void> detectTimeout(bool *result, uint32_t milliseconds) {
         asio::deadline_timer timer(executor);
         timer.expires_from_now(boost::posix_time::milliseconds(milliseconds));
         co_await timer.async_wait(use_nothrow_awaitable);
-        result = false;
+        *result = false;
         co_return;
     }
 
-    awaitable<void> MudLink::detectSSLCheck(TcpSocket &sock, boost::beast::flat_buffer &buf, bool &result) {
+    awaitable<void> MudLink::detectSSLCheck(TcpSocket &sock, boost::beast::flat_buffer &buf, bool *result) {
         auto [ec, tlsResult] = co_await boost::beast::async_detect_ssl(sock, buf, use_nothrow_awaitable);
         if(ec) {
             std::cout << "got a detect_ssl error!" << std::endl;
-            result = false;
+            *result = false;
         }
-        else result = tlsResult;
+        else *result = tlsResult;
         co_return;
     }
 
     awaitable<bool> MudLink::detectSSL(TcpSocket &sock, boost::beast::flat_buffer &buf) {
         bool result = false;
-        co_await (detectSSLCheck(sock, buf, result) || detectTimeout(result, 100));
+        co_await (detectSSLCheck(sock, buf, &result) || detectTimeout(&result, 100));
         co_return result;
     }
 
     awaitable<void> MudLink::handleConnection(TcpSocket sock) {
         auto exec = sock.get_executor();
-
-        boost::beast::flat_buffer readBuf;
+        beast::flat_buffer readBuf;
         auto remote_endpoint = sock.remote_endpoint();
 
         std::cout << "Got connection from: " << remote_endpoint.address().to_string() << std::endl;
@@ -102,15 +101,9 @@ namespace mudlink {
             for(;it != end; it++)
                 hostnames.push_back(it->host_name());
 
-        bool tlsResult = tlsEnabled && co_await detectSSL(sock, readBuf);
-        auto bufData = beast::buffers_to_string(readBuf.cdata());
-        std::cout << "BUFFER CONTAINS: " << bufData << std::endl;
+        auto buf2 = beast::buffers_to_string(readBuf.cdata());
 
-        bool ws = false;
-
-        connection::ClientConnection *cc = nullptr;
-
-        if(tlsResult) {
+        if(tlsEnabled && co_await detectSSL(sock, readBuf)) {
             // If we don't support TLS, just return to kill the incoming connection.
             if(!tlsEnabled) co_return;
             TlsSocket tlsSock(std::move(sock), sslContext);
@@ -118,29 +111,10 @@ namespace mudlink {
             if(hsEC) {
                 // TODO: something with the error!
             }
-
-            ws = co_await detectWebSocket(tlsSock, readBuf);
-            if(ws) {
-                std::cout << "creating TLS WebSocket" << std::endl;
-            } else {
-                std::cout << "creating TLS Telnet" << std::endl;
-                cc = new telnet::TelnetClient<TlsSocket>(remote_endpoint, toGame, std::move(tlsSock));
-                cc->hostnames = hostnames;
-                cc->isTLS = true;
-                co_await registerConnection("telnets", cc);
-            }
+            co_await createProtocol(remote_endpoint, hostnames, tlsSock, buf2, true);
 
         } else {
-            ws = co_await detectWebSocket(sock, readBuf);
-            if(ws) {
-                std::cout << "creating TCP WebSocket" << std::endl;
-            } else {
-                std::cout << "creating TCP Telnet" << std::endl;
-                cc = new telnet::TelnetClient<TcpSocket>(remote_endpoint, toGame, std::move(sock));
-                cc->hostnames = hostnames;
-                co_await registerConnection("telnet", cc);
-            }
-
+            co_await createProtocol(remote_endpoint, hostnames, sock, buf2, false);
         }
         std::cout << "handleConnection() finished" << std::endl;
     }
