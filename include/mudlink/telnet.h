@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mudlink/connection.h"
+#include <boost/asio/experimental/coro.hpp>
 
 namespace mudlink::telnet {
     template<class T>
